@@ -1,0 +1,2 @@
+[console_scripts]
+arxiv = arxiv_cli.cli:cli

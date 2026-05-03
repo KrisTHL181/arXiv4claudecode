@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: arxiv-cli
+Version: 0.1.0
+Summary: arXiv CLI - Browse, search, and download papers from arxiv.org
+Author: arXiv CLI Team
+License: MIT
+Project-URL: Homepage, https://github.com/user/arxiv-cli
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: click>=8.0
+Requires-Dist: rich>=13.0
+Requires-Dist: requests>=2.28
+Requires-Dist: feedparser>=6.0
+Requires-Dist: beautifulsoup4>=4.12
+Requires-Dist: lxml>=5.0
