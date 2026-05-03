@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import urllib.parse
 
@@ -162,9 +163,13 @@ class ArxivClient:
         else:
             cat_filter = cat_clauses
 
-        # Wrap raw query if it contains spaces (multi-word)
+        # Wrap raw query if it contains spaces and is plain text
+        # (no explicit field prefix, boolean grouping, or phrase).
         q = query.strip()
-        if " " in q and not (q.startswith("(") or q.startswith('"')):
+        _FIELD_PREFIX_RE = r"^(ti|au|abs|all|cat|jr|rn|id|co):"
+        if " " in q and not (
+            q.startswith("(") or q.startswith('"') or re.match(_FIELD_PREFIX_RE, q)
+        ):
             q = f"all:{q}"
 
         return f"({q}) AND ({cat_filter})"
