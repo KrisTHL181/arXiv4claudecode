@@ -77,6 +77,29 @@ def _comma_sep_categories(ctx, param, value):
     return [r.strip() for r in result if r.strip()]
 
 
+# ── Helpers ──────────────────────────────────────────────────
+
+def _output_options(func):
+    """Decorator: add --json and --plain output format options to a command."""
+    func = click.option(
+        "--json", "output_format",
+        flag_value="json", default=None,
+        help="Output in JSON format.",
+    )(func)
+    func = click.option(
+        "--plain", "output_format",
+        flag_value="plain",
+        help="Output in plain text format.",
+    )(func)
+    return func
+
+
+def _apply_output_format(ctx, output_format):
+    """Apply command-level output format override if given."""
+    if output_format:
+        ctx.obj["fmt"].style = output_format
+
+
 # ── CLI group ────────────────────────────────────────────────
 
 @click.group()
@@ -114,12 +137,14 @@ def browse():
 
 @browse.command("new")
 @click.argument("category", default="cs", required=False)
+@_output_options
 @click.pass_context
-def browse_new(ctx, category):
+def browse_new(ctx, category, output_format):
     """Most recent mailing (RSS feed, always shows abstracts).
 
     CATEGORY: arXiv category ID (default: cs).
     """
+    _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
     fmt: Formatter = ctx.obj["fmt"]
 
@@ -136,12 +161,14 @@ def browse_new(ctx, category):
 @browse.command("recent")
 @click.argument("category", default="cs", required=False)
 @click.option("--max-results", "-n", default=0, help="Limit results (0 = all).")
+@_output_options
 @click.pass_context
-def browse_recent(ctx, category, max_results):
+def browse_recent(ctx, category, max_results, output_format):
     """Last 5 mailings for a category.
 
     CATEGORY: arXiv category ID (default: cs).
     """
+    _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
     fmt: Formatter = ctx.obj["fmt"]
 
@@ -160,12 +187,14 @@ def browse_recent(ctx, category, max_results):
 @browse.command("current")
 @click.argument("category", default="cs", required=False)
 @click.option("--max-results", "-n", default=0, help="Limit results (0 = all).")
+@_output_options
 @click.pass_context
-def browse_current(ctx, category, max_results):
+def browse_current(ctx, category, max_results, output_format):
     """Current month's listings.
 
     CATEGORY: arXiv category ID (default: cs).
     """
+    _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
     fmt: Formatter = ctx.obj["fmt"]
 
@@ -189,14 +218,16 @@ def browse_current(ctx, category, max_results):
 @click.argument("month", type=int)
 @click.argument("category", default="cs", required=False)
 @click.option("--max-results", "-n", default=0, help="Limit results (0 = all).")
+@_output_options
 @click.pass_context
-def browse_month(ctx, year, month, category, max_results):
+def browse_month(ctx, year, month, category, max_results, output_format):
     """Specific year/month listings.
 
     YEAR: e.g., 2025
     MONTH: 1-12
     CATEGORY: arXiv category ID (default: cs).
     """
+    _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
     fmt: Formatter = ctx.obj["fmt"]
 
@@ -228,9 +259,11 @@ def browse_month(ctx, year, month, category, max_results):
     help="Filter by category (repeatable, comma-separated).",
 )
 @click.option("--max-results", "-n", default=200, help="Maximum results.")
+@_output_options
 @click.pass_context
-def catch_up(ctx, since, categories, max_results):
+def catch_up(ctx, since, categories, max_results, output_format):
     """Papers since a date. Use 'DD Month YYYY' (e.g. '15 April 2025') or 'YYYY-MM-DD'."""
+    _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
     fmt: Formatter = ctx.obj["fmt"]
 
@@ -281,12 +314,14 @@ def catch_up(ctx, since, categories, max_results):
     default="desc",
     help="Sort direction.",
 )
+@_output_options
 @click.pass_context
-def search(ctx, query, categories, max_results, sort_by, sort_order):
+def search(ctx, query, categories, max_results, sort_by, sort_order, output_format):
     """Search within the arXiv archive.
 
     QUERY: Search terms (supports field prefixes: ti:, au:, abs:, all:, cat:).
     """
+    _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
     fmt: Formatter = ctx.obj["fmt"]
 
@@ -320,11 +355,13 @@ def search(ctx, query, categories, max_results, sort_by, sort_order):
 @click.option("--year", "-y", type=int, help="Filter by year.")
 @click.option("--category", "-c", "category_id", help="Filter by category.")
 @click.option("--refresh", is_flag=True, help="Try to fetch live stats from arXiv.")
+@_output_options
 @click.pass_context
-def stats(ctx, year, category_id, refresh):
+def stats(ctx, year, category_id, refresh, output_format):
     """Article submission statistics by year and category."""
     from arxiv_cli.stats import load_stats
 
+    _apply_output_format(ctx, output_format)
     fmt: Formatter = ctx.obj["fmt"]
 
     try:
@@ -352,12 +389,14 @@ def stats(ctx, year, category_id, refresh):
     help="Output directory.",
 )
 @click.option("--filename", type=str, help="Custom output filename.")
+@_output_options
 @click.pass_context
-def download(ctx, paper_id, fmt_type, output, filename):
+def download(ctx, paper_id, fmt_type, output, filename, output_format):
     """Download a paper from arXiv.
 
     PAPER_ID: arXiv paper ID (e.g., '2107.05580', '2107.05580v1').
     """
+    _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
     fmt: Formatter = ctx.obj["fmt"]
 
@@ -397,13 +436,15 @@ def download(ctx, paper_id, fmt_type, output, filename):
     default=None,
     help="Output Markdown file path (prints to stdout if omitted).",
 )
+@_output_options
 @click.pass_context
-def html2md(ctx, input, output):
+def html2md(ctx, input, output, output_format):
     """Convert an arXiv HTML paper to Markdown.
 
     INPUT: arXiv paper ID (e.g., '2107.05580') or path to a local HTML file.
     Downloads the HTML version if a paper ID is given.
     """
+    _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
     fmt: Formatter = ctx.obj["fmt"]
 
@@ -459,9 +500,11 @@ def html2md(ctx, input, output):
     "--group", "-g",
     help="Filter by group (cs, math, physics, econ, eess, q-bio, q-fin, stat).",
 )
+@_output_options
 @click.pass_context
-def categories(ctx, group):
+def categories(ctx, group, output_format):
     """List arXiv categories organized by group."""
+    _apply_output_format(ctx, output_format)
     fmt: Formatter = ctx.obj["fmt"]
 
     if group:
