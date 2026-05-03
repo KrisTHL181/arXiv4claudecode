@@ -304,7 +304,7 @@ def catch_up(ctx, since, categories, max_results, output_format):
 @click.option("--max-results", "-n", default=50, help="Maximum results.")
 @click.option(
     "--sort-by",
-    type=click.Choice(["relevance", "submitted", "updated"]),
+    type=click.Choice(["relevance", "submittedDate", "submitted", "updated", "lastUpdatedDate"]),
     default="relevance",
     help="Sort field.",
 )
@@ -331,7 +331,9 @@ def search(ctx, query, categories, max_results, sort_by, sort_order, output_form
     sort_map = {
         "relevance": "relevance",
         "submitted": "submittedDate",
+        "submittedDate": "submittedDate",
         "updated": "lastUpdatedDate",
+        "lastUpdatedDate": "lastUpdatedDate",
     }
     order_map = {"asc": "ascending", "desc": "descending"}
 
