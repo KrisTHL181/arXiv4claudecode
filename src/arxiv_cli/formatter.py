@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
-from dataclasses import fields, is_dataclass
-from datetime import datetime
 
-from arxiv_cli.models import ArxivArticle, Author, CategoryGroup
+import arxiv
+
+from arxiv_cli.models import CategoryGroup
 
 
 class Formatter:
@@ -18,7 +19,7 @@ class Formatter:
 
     def print_articles(
         self,
-        articles: list[ArxivArticle],
+        articles: list[arxiv.Result],
         show_abstracts: bool = True,
     ) -> None:
         """Print a list of articles."""
@@ -90,8 +91,7 @@ class Formatter:
     # ── Rich rendering ────────────────────────────────────────
 
     @staticmethod
-    def _print_articles_rich(articles: list[ArxivArticle], show_abstracts: bool) -> None:
-        from rich import box
+    def _print_articles_rich(articles: list[arxiv.Result], show_abstracts: bool) -> None:
         from rich.console import Console, Group
         from rich.markdown import Markdown
         from rich.panel import Panel
@@ -100,19 +100,22 @@ class Formatter:
 
         console = Console()
         for i, a in enumerate(articles):
-            # Title with number
             title = Text.from_markup(f"[bold yellow]#{i + 1}[/bold yellow]  {a.title}")
 
-            # Build metadata table
             meta_table = Table.grid(padding=(0, 2))
             meta_table.add_column(style="bold", width=10)
             meta_table.add_column()
 
-            if a.short_id:
-                urls = f"[green]abs:[/green] {a.abs_url}\n[green]pdf:[/green] {a.pdf_url}"
-                if a.html_url:
-                    urls += f"\n[green]html:[/green] {a.html_url}"
-                meta_table.add_row("ID", f"[green]{a.short_id}[/green]  {urls}")
+            short_id = a.get_short_id()
+            abs_url = a.entry_id
+            pdf_url = a.pdf_url
+            html_url = _html_url(short_id)
+
+            if short_id:
+                urls = f"[green]abs:[/green] {abs_url}\n[green]pdf:[/green] {pdf_url}"
+                if html_url:
+                    urls += f"\n[green]html:[/green] {html_url}"
+                meta_table.add_row("ID", f"[green]{short_id}[/green]  {urls}")
             if a.primary_category:
                 meta_table.add_row("Category", f"[cyan]{a.primary_category}[/cyan]"
                                    + (f"  ({', '.join(a.categories)})" if len(a.categories) > 1 else ""))
@@ -128,13 +131,11 @@ class Formatter:
             if a.journal_ref:
                 meta_table.add_row("Journal", a.journal_ref)
 
-            # Build content group
             elements: list = [meta_table]
 
             if show_abstracts and a.summary:
                 elements.append(Text(""))
                 elements.append(Text("Abstract:", style="bold"))
-                # Truncate abstract for display
                 text = a.summary[:800]
                 if len(a.summary) > 800:
                     text += "..."
@@ -201,11 +202,12 @@ class Formatter:
     # ── Plain rendering ───────────────────────────────────────
 
     @staticmethod
-    def _print_articles_plain(articles: list[ArxivArticle], show_abstracts: bool) -> None:
+    def _print_articles_plain(articles: list[arxiv.Result], show_abstracts: bool) -> None:
         for i, a in enumerate(articles):
             print(f"--- {i + 1}. {a.title}")
-            if a.short_id:
-                print(f"ID: {a.short_id}")
+            short_id = a.get_short_id()
+            if short_id:
+                print(f"ID: {short_id}")
             if a.primary_category:
                 print(f"Category: {a.primary_category}")
             if a.authors:
@@ -254,27 +256,8 @@ class Formatter:
     # ── JSON rendering ────────────────────────────────────────
 
     @staticmethod
-    def _print_articles_json(articles: list[ArxivArticle]) -> None:
-        def _to_dict(obj):
-            if is_dataclass(obj):
-                d = {}
-                for f in fields(obj):
-                    d[f.name] = _to_dict(getattr(obj, f.name))
-                # Include key properties
-                if isinstance(obj, ArxivArticle):
-                    d["short_id"] = obj.short_id
-                    d["id_without_version"] = obj.id_without_version
-                    d["source_url"] = obj.source_url
-                    d["html_url"] = obj.html_url
-                    d["abs_url"] = obj.abs_url
-                return d
-            if isinstance(obj, list):
-                return [_to_dict(i) for i in obj]
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            return obj
-
-        items = [_to_dict(a) for a in articles]
+    def _print_articles_json(articles: list[arxiv.Result]) -> None:
+        items = [_result_to_dict(a) for a in articles]
         json.dump(items, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
 
@@ -292,3 +275,39 @@ class Formatter:
             })
         json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
+
+
+def _html_url(short_id: str) -> str | None:
+    """Derive the HTML URL from a short arXiv ID (strips version suffix)."""
+    if not short_id:
+        return None
+    return f"https://arxiv.org/html/{_id_without_version(short_id)}"
+
+
+def _id_without_version(short_id: str) -> str:
+    """Strip version suffix from arXiv ID."""
+    return re.sub(r"v\d+$", "", short_id)
+
+
+def _result_to_dict(a: arxiv.Result) -> dict:
+    """Convert an arxiv.Result to a JSON-serialisable dict."""
+    short_id = a.get_short_id()
+    return {
+        "entry_id": a.entry_id,
+        "short_id": short_id,
+        "id_without_version": _id_without_version(short_id),
+        "title": a.title,
+        "summary": a.summary,
+        "authors": [{"name": au.name} for au in a.authors],
+        "published": a.published.isoformat() if a.published else None,
+        "updated": a.updated.isoformat() if a.updated else None,
+        "primary_category": a.primary_category,
+        "categories": a.categories,
+        "comment": a.comment,
+        "journal_ref": a.journal_ref,
+        "doi": a.doi,
+        "pdf_url": a.pdf_url,
+        "abs_url": a.entry_id,
+        "html_url": _html_url(short_id),
+        "source_url": f"https://arxiv.org/src/{short_id}" if short_id else None,
+    }
