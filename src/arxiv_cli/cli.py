@@ -387,6 +387,71 @@ def download(ctx, paper_id, fmt_type, output, filename):
         raise SystemExit(1)
 
 
+# ── HTML to Markdown command ─────────────────────────────────
+
+@cli.command("html2md")
+@click.argument("input", type=str)
+@click.option(
+    "--output", "-o",
+    type=click.Path(),
+    default=None,
+    help="Output Markdown file path (prints to stdout if omitted).",
+)
+@click.pass_context
+def html2md(ctx, input, output):
+    """Convert an arXiv HTML paper to Markdown.
+
+    INPUT: arXiv paper ID (e.g., '2107.05580') or path to a local HTML file.
+    Downloads the HTML version if a paper ID is given.
+    """
+    client: ArxivClient = ctx.obj["client"]
+    fmt: Formatter = ctx.obj["fmt"]
+
+    from arxiv_cli.converter import convert_html_to_markdown
+
+    # Determine if input is a paper ID or a local file path
+    is_file = os.path.exists(input) or input.endswith(".html") or input.endswith(".htm")
+
+    if is_file:
+        try:
+            with open(input, "r", encoding="utf-8") as f:
+                html = f.read()
+        except OSError as e:
+            fmt.print_error(f"Cannot read file '{input}': {e}")
+            raise SystemExit(1)
+    else:
+        # Treat as arXiv paper ID
+        url = f"https://arxiv.org/html/{input}"
+        try:
+            resp = client._session.get(url, timeout=30)
+            if resp.status_code == 404:
+                fmt.print_error(f"Paper not found: {input}. Check the ID.")
+                raise SystemExit(1)
+            resp.raise_for_status()
+            html = resp.text
+        except Exception as e:
+            fmt.print_error(f"Failed to fetch HTML for {input}: {e}")
+            raise SystemExit(1)
+
+    try:
+        md = convert_html_to_markdown(html)
+    except Exception as e:
+        fmt.print_error(f"Conversion failed: {e}")
+        raise SystemExit(1)
+
+    if output:
+        try:
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(md)
+            fmt.print_download_result(output)
+        except OSError as e:
+            fmt.print_error(f"Cannot write to '{output}': {e}")
+            raise SystemExit(1)
+    else:
+        # Print to stdout
+        click.echo(md)
+
+
 # ── Categories command ───────────────────────────────────────
 
 @cli.command("categories")
