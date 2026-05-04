@@ -570,3 +570,201 @@ def convert_html_to_markdown(html: str) -> str:
     """Convenience function: convert arXiv HTML to Markdown."""
     converter = HtmlToMarkdown()
     return converter.convert(html)
+
+
+def extract_generic_html(html: str) -> str:
+    """Convert generic semantic HTML5 to Markdown.
+
+    Used when HtmlToMarkdown fails to find LaTeXML-specific CSS classes,
+    e.g. for ar5ivist output which uses standard HTML5 elements.
+    Handles: sections, headings, paragraphs, figures, math, lists, tables, code.
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    for tag in soup.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+
+    article = soup.find("article") or soup.find("main") or soup.body
+    if not article:
+        return "Error: Could not find paper content in HTML."
+
+    output: list[str] = []
+
+    def _walk(el, list_depth: int = 0) -> None:
+        if isinstance(el, NavigableString):
+            text = str(el).strip()
+            if text:
+                output.append(text)
+            return
+        if not isinstance(el, Tag):
+            return
+
+        tag = el.name
+        cls = set(el.get("class", []))
+
+        # Skip hidden / nav elements
+        if tag in ("script", "style", "nav", "header", "footer"):
+            return
+
+        # Headings
+        if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            level = int(tag[1])
+            prefix = "#" * level
+            output.append(f"\n{prefix} {_clean(el.get_text())}\n")
+            return
+
+        # Math
+        if tag == "math":
+            latex = _get_math_latex(el)
+            if latex:
+                if el.get("display") == "inline":
+                    output.append(f"${latex}$")
+                else:
+                    output.append(f"\n$$\n{latex}\n$$\n")
+            return
+
+        # Images
+        if tag == "img":
+            src = el.get("src", "")
+            alt = el.get("alt", "Figure")
+            output.append(f"![{alt}]({src})\n")
+            return
+
+        # Figures
+        if tag == "figure":
+            img = el.find("img")
+            caption_el = el.find("figcaption")
+            caption = _clean(caption_el.get_text()) if caption_el else ""
+            if img:
+                src = img.get("src", "")
+                alt = img.get("alt", caption or "Figure")
+                output.append(f"![{alt}]({src})")
+                if caption:
+                    output.append(f"*{caption}*")
+                output.append("")
+            else:
+                for child in el.children:
+                    _walk(child, list_depth)
+            return
+
+        # Tables
+        if tag == "table":
+            lines: list[str] = []
+            rows = el.find_all("tr")
+            for i, row in enumerate(rows):
+                cells = []
+                for cell in row.find_all(["th", "td"]):
+                    cells.append(_clean(cell.get_text()))
+                if cells:
+                    lines.append("| " + " | ".join(cells) + " |")
+                    if i == 0 and len(cells) > 0:
+                        lines.append("|" + "|".join(["---"] * len(cells)) + "|")
+            if lines:
+                output.append("\n".join(lines) + "\n")
+            return
+
+        # Lists
+        if tag == "ul":
+            prefix = "  " * list_depth + "- "
+            for item in el.find_all("li", recursive=False):
+                text = _clean(item.get_text())
+                output.append(f"{prefix}{text}")
+            output.append("")
+            return
+
+        if tag == "ol":
+            for i, item in enumerate(el.find_all("li", recursive=False), 1):
+                prefix = "  " * list_depth + f"{i}. "
+                text = _clean(item.get_text())
+                output.append(f"{prefix}{text}")
+            output.append("")
+            return
+
+        # Code blocks
+        if tag == "pre":
+            code = el.find("code")
+            code_text = code.get_text() if code else el.get_text()
+            output.append(f"\n```\n{code_text}\n```\n")
+            return
+
+        # Inline code
+        if tag == "code":
+            output.append(f"`{el.get_text()}`")
+            return
+
+        # Links
+        if tag == "a":
+            href = el.get("href", "")
+            text = _clean(el.get_text())
+            if href and not href.startswith("#"):
+                output.append(f"[{text}]({href})")
+            else:
+                output.append(text)
+            return
+
+        # Inline formatting
+        if tag in ("em", "i"):
+            output.append(f"*{_clean(el.get_text())}*")
+            return
+        if tag in ("strong", "b"):
+            output.append(f"**{_clean(el.get_text())}**")
+            return
+        if tag == "sub":
+            output.append(f"~{_clean(el.get_text())}~")
+            return
+        if tag == "sup":
+            output.append(f"^{_clean(el.get_text())}^")
+            return
+
+        # Paragraphs
+        if tag == "p":
+            text = _collect_generic_inline(el)
+            if text:
+                output.append(f"\n{text}\n")
+            return
+
+        # Block sections — add spacing
+        if tag in ("section", "div", "article", "main"):
+            for child in el.children:
+                _walk(child, list_depth)
+            return
+
+        # Recurse for unknown tags
+        for child in el.children:
+            _walk(child, list_depth)
+
+    _walk(article)
+    return "\n".join(output).strip() + "\n"
+
+
+def _collect_generic_inline(el: Tag) -> str:
+    """Collect inline content from a generic HTML element."""
+    parts: list[str] = []
+    for child in el.children:
+        if isinstance(child, NavigableString):
+            parts.append(str(child))
+        elif isinstance(child, Tag):
+            if child.name == "math":
+                latex = _get_math_latex(child)
+                if latex:
+                    parts.append(f"${latex}$")
+            elif child.name == "a":
+                href = child.get("href", "")
+                text = _clean(child.get_text())
+                if href and not href.startswith("#"):
+                    parts.append(f"[{text}]({href})")
+                else:
+                    parts.append(text)
+            elif child.name in ("em", "i"):
+                parts.append(f"*{_clean(child.get_text())}*")
+            elif child.name in ("strong", "b"):
+                parts.append(f"**{_clean(child.get_text())}**")
+            elif child.name == "code":
+                parts.append(f"`{child.get_text()}`")
+            elif child.name == "sub":
+                parts.append(f"~{_clean(child.get_text())}~")
+            elif child.name == "sup":
+                parts.append(f"^{_clean(child.get_text())}^")
+            else:
+                parts.append(child.get_text())
+    return _normalize_whitespace("".join(parts))

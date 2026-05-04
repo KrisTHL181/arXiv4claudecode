@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import tempfile
 from datetime import datetime
 
 import click
@@ -438,13 +440,21 @@ def download(ctx, paper_id, fmt_type, output, filename, output_format):
     default=None,
     help="Output Markdown file path (prints to stdout if omitted).",
 )
+@click.option(
+    "--timeout", type=int, default=300,
+    help="Timeout in seconds for ar5ivist LaTeX conversion (default: 300).",
+)
 @_output_options
 @click.pass_context
-def html2md(ctx, input, output, output_format):
-    """Convert an arXiv HTML paper to Markdown.
+def html2md(ctx, input, output, output_format, timeout):
+    """Convert an arXiv paper to Markdown.
 
     INPUT: arXiv paper ID (e.g., '2107.05580') or path to a local HTML file.
-    Downloads the HTML version if a paper ID is given.
+
+    For paper IDs, the conversion tries these in order:
+      1. arXiv native HTML (arxiv.org/html/{id})
+      2. LaTeX source via ar5ivist (Docker or local)
+      3. Raw LaTeX source as a code block
     """
     _apply_output_format(ctx, output_format)
     client: ArxivClient = ctx.obj["client"]
@@ -452,7 +462,6 @@ def html2md(ctx, input, output, output_format):
 
     from arxiv_cli.converter import convert_html_to_markdown
 
-    # Determine if input is a paper ID or a local file path
     is_file = os.path.exists(input) or input.endswith(".html") or input.endswith(".htm")
 
     if is_file:
@@ -462,26 +471,130 @@ def html2md(ctx, input, output, output_format):
         except OSError as e:
             fmt.print_error(f"Cannot read file '{input}': {e}")
             raise SystemExit(1)
-    else:
-        # Treat as arXiv paper ID
-        url = f"https://arxiv.org/html/{input}"
+
         try:
-            resp = client._session.get(url, timeout=30)
-            if resp.status_code == 404:
-                fmt.print_error(f"Paper not found: {input}. Check the ID.")
-                raise SystemExit(1)
-            resp.raise_for_status()
-            html = resp.text
+            md = convert_html_to_markdown(html)
         except Exception as e:
-            fmt.print_error(f"Failed to fetch HTML for {input}: {e}")
+            fmt.print_error(f"Conversion failed: {e}")
             raise SystemExit(1)
 
-    try:
-        md = convert_html_to_markdown(html)
-    except Exception as e:
-        fmt.print_error(f"Conversion failed: {e}")
-        raise SystemExit(1)
+        _write_md_output(md, output, fmt)
+        return
 
+    # ── arXiv paper ID path ──────────────────────────────────
+    paper_id = input
+
+    # Phase 1: Try native arXiv HTML
+    html = _fetch_arxiv_html(paper_id, client)
+    if html is not None:
+        try:
+            md = convert_html_to_markdown(html)
+            _write_md_output(md, output, fmt)
+            return
+        except Exception as e:
+            fmt.print_error(f"HTML conversion failed: {e}")
+
+    # Phase 2: Try ar5ivist pipeline (Docker → local)
+    if _try_ar5ivist_pipeline(paper_id, client, fmt, output, timeout):
+        return
+
+    # Phase 3: Ultimate fallback — raw LaTeX source
+    _output_raw_latex(paper_id, client, fmt, output)
+
+
+def _fetch_arxiv_html(paper_id: str, client: ArxivClient) -> str | None:
+    """Fetch HTML from arxiv.org/html/{id}. Returns None on 404."""
+    import requests as _requests
+
+    url = f"https://arxiv.org/html/{paper_id}"
+    try:
+        resp = client._session.get(url, timeout=30)  # noqa: SLF001
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.text
+    except _requests.RequestException:
+        return None
+
+
+def _try_ar5ivist_pipeline(
+    paper_id: str,
+    client: ArxivClient,
+    fmt: Formatter,
+    output: str | None,
+    timeout: int,
+) -> bool:
+    """Attempt ar5ivist conversion. Returns True on success."""
+    from arxiv_cli.ar5ivist import (
+        Ar5ivistNotFoundError,
+        LaTeXConversionError,
+        SourceExtractionError,
+        tex_to_html,
+    )
+    from arxiv_cli.converter import convert_html_to_markdown, extract_generic_html
+
+    temp_dir = tempfile.mkdtemp(prefix="arxiv_ar5ivist_")
+    try:
+        html = tex_to_html(
+            paper_id, client, temp_dir,
+            progress_callback=lambda msg: click.echo(msg, err=True),
+            timeout=timeout,
+        )
+
+        md = convert_html_to_markdown(html)
+
+        # If LaTeXML converter produced nothing useful, try generic extraction
+        if not md or md.startswith("Error:"):
+            md = extract_generic_html(html)
+
+        _write_md_output(md, output, fmt)
+        return True
+
+    except Ar5ivistNotFoundError:
+        click.echo(
+            "ar5ivist not available — falling back to raw LaTeX source.", err=True,
+        )
+    except SourceExtractionError as e:
+        click.echo(f"Source download failed: {e}", err=True)
+    except LaTeXConversionError as e:
+        click.echo(f"ar5ivist conversion failed: {e}", err=True)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return False
+
+
+def _output_raw_latex(
+    paper_id: str,
+    client: ArxivClient,
+    fmt: Formatter,
+    output: str | None,
+) -> None:
+    """Last resort: download LaTeX source and output as a code block."""
+    from arxiv_cli.ar5ivist import download_and_extract_source, SourceExtractionError
+
+    temp_dir = tempfile.mkdtemp(prefix="arxiv_latex_")
+    try:
+        tex_path = download_and_extract_source(paper_id, client, temp_dir)
+        with open(tex_path, "r", encoding="utf-8", errors="replace") as f:
+            tex_content = f.read()
+
+        md = (
+            f"# LaTeX Source: {paper_id}\n\n"
+            f"> _This paper has no HTML version. Showing raw LaTeX source._\n\n"
+            f"```latex\n{tex_content}\n```\n"
+        )
+        _write_md_output(md, output, fmt)
+
+    except SourceExtractionError as e:
+        fmt.print_error(f"All conversion methods failed for {paper_id}: {e}")
+        raise SystemExit(1)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _write_md_output(md: str, output: str | None, fmt: Formatter) -> None:
+    """Write Markdown to file or stdout."""
     if output:
         try:
             with open(output, "w", encoding="utf-8") as f:
@@ -491,7 +604,6 @@ def html2md(ctx, input, output, output_format):
             fmt.print_error(f"Cannot write to '{output}': {e}")
             raise SystemExit(1)
     else:
-        # Print to stdout
         click.echo(md)
 
 

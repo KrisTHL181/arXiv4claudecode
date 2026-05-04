@@ -98,15 +98,22 @@ arxiv download 2107.05580 -f pdf -o ~/papers
 arxiv download 2107.05580 -f src      # LaTeX 源码
 ```
 
-### `html2md` — HTML 转 Markdown
+### `html2md` — 论文转 Markdown
 
-将 arXiv HTML 论文转换为 Markdown，方便在 Claude Code 中直接阅读。
+将 arXiv 论文转换为 Markdown，内置多级回退策略：
+
+1. 优先获取 arXiv 原生 HTML 版本（`arxiv.org/html/{id}`）
+2. 若无 HTML，通过 **ar5ivist** 将 LaTeX 源码转为 HTML 再转 Markdown
+3. 最终回退：输出原始 LaTeX 源码
 
 ```bash
-arxiv html2md 2107.05580              # 下载并转换，输出到 stdout
+arxiv html2md 2107.05580              # 自动选择最佳格式，输出到 stdout
 arxiv html2md 2107.05580 -o paper.md  # 保存到文件
 arxiv html2md paper.html              # 转换本地 HTML 文件
+arxiv html2md 2107.05580 --timeout 600  # 自定义 ar5ivist 超时（默认 300s）
 ```
+
+> **ar5ivist** 是 ar5iv.org 的本地工具，可将 LaTeX 论文转为 HTML5。需安装 Docker（推荐）或 latexml 才能使用此功能。详见下方 [ar5ivist 安装](#ar5ivist-安装) 章节。
 
 ### `stats` — 论文统计
 
@@ -122,6 +129,42 @@ arxiv stats -c cs --refresh           # 尝试抓取实时数据
 arxiv categories                      # 所有 8 大组的 ~180 个分类
 arxiv categories -g cs                # 只看 CS 分类
 ```
+
+## ar5ivist 安装
+
+ar5ivist 提供 LaTeX → HTML5 转换能力。对于没有原生 HTML 版本的 arXiv 论文（多数老论文），安装后可将 LaTeX 源码自动转为可读的 Markdown。
+
+### 自动安装（推荐）
+
+```bash
+bash scripts/install_ar5ivist.sh
+```
+
+脚本按以下顺序尝试：
+1. **Docker 拉取**预构建的 `latexml/ar5ivist:2512.17` 镜像
+2. **本地 Docker 构建** — 从 GitHub 克隆源码并构建
+3. 若均失败，打印手动安装说明
+
+### 手动安装
+
+```bash
+# Docker 方式（推荐）
+docker pull latexml/ar5ivist:2512.17
+
+# 系统包管理器
+sudo apt install latexml         # Debian/Ubuntu
+brew install latexml             # macOS
+cpan install LaTeXML             # 通用
+```
+
+### 验证
+
+```bash
+docker image inspect latexml/ar5ivist:2512.17   # Docker 方式
+latexmlc --version                              # 本地安装
+```
+
+> 未安装 ar5ivist 时，`arxiv html2md` 对无 HTML 的论文会直接输出原始 LaTeX 源码。
 
 ## 输出格式
 
@@ -142,8 +185,19 @@ arxiv search "transformers" --plain   # 纯文本（适合管道处理）
 
 - 获取最新论文：`arxiv browse new cs.AI | head -100`
 - 搜索论文：`arxiv search "query" --json -n 10`
-- 下载并阅读：`arxiv download ID && arxiv html2md ID -o paper.md`
+- 下载并阅读：`arxiv html2md ID -o paper.md`
+- 一键阅读（含 PDF 回退）：`bash skills/arxiv-reader/scripts/read_paper.sh ID`
 ```
+
+### arxiv-reader Skill
+
+项目内置了 `arxiv-reader` Claude Code skill，提供终端论文阅读能力：
+
+```
+/arxiv-reader 2107.05580
+```
+
+该 skill 调用 `read_paper.sh`，其回退链为：HTML → ar5ivist → LaTeX 源码 → PDF 文本提取。
 
 建议在 Claude Code 设置中为 arxiv 命令开启 allowlist 权限以减少审批打断。
 
