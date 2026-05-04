@@ -537,7 +537,6 @@ def _try_ar5ivist_pipeline(
     try:
         html = tex_to_html(
             paper_id, client, temp_dir,
-            progress_callback=lambda msg: click.echo(msg, err=True),
             timeout=timeout,
         )
 

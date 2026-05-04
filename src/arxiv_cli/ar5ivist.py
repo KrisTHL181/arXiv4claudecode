@@ -171,16 +171,6 @@ def run_ar5ivist(
     tex_abs = str(tex_path.resolve())
     html_filename = "index.html"
 
-    _backend_labels = {
-        Ar5ivistBackend.DOCKER: "ar5ivist (Docker)",
-        Ar5ivistBackend.AR5IVIST: "ar5ivist",
-        Ar5ivistBackend.LATEXMLC: "latexmlc",
-        Ar5ivistBackend.LATEXML: "latexml + latexmlpost",
-    }
-    if progress_callback:
-        label = _backend_labels.get(backend, str(backend))
-        progress_callback(f"Converting LaTeX to HTML via {label}...")
-
     try:
         if backend == Ar5ivistBackend.DOCKER:
             return _run_docker(tex_abs, html_filename, progress_callback, timeout)
@@ -290,8 +280,6 @@ def _run_latexml_pipeline(
     xml_path = os.path.join(output_dir, "output.xml")
     html_path = os.path.join(output_dir, html_filename)
 
-    if progress_callback:
-        progress_callback("Step 1/2: latexml (TeX → XML)...")
     _run_subprocess(
         ["latexml", "--dest", xml_path, tex_basename],
         progress_callback,
@@ -304,8 +292,6 @@ def _run_latexml_pipeline(
             f"latexml did not produce expected output: {xml_path}"
         )
 
-    if progress_callback:
-        progress_callback("Step 2/2: latexmlpost (XML → HTML)...")
     _run_subprocess(
         ["latexmlpost", "--dest", html_path, xml_path],
         progress_callback,
@@ -327,10 +313,7 @@ def _run_subprocess(
     *,
     cwd: str | None = None,
 ) -> None:
-    """Run a subprocess with optional progress reporting and timeout."""
-    if progress_callback:
-        progress_callback(f"Running: {' '.join(cmd)}")
-
+    """Run a subprocess with timeout."""
     try:
         result = subprocess.run(
             cmd,
@@ -370,13 +353,7 @@ def tex_to_html(
             "or the tool will output raw LaTeX source instead."
         )
 
-    if progress_callback:
-        progress_callback("Downloading LaTeX source from arXiv...")
-
     tex_path = download_and_extract_source(paper_id, client, temp_dir)
-
-    if progress_callback:
-        progress_callback(f"Found main file: {tex_path.name}")
 
     html_file = run_ar5ivist(
         tex_path, temp_dir, backend,
