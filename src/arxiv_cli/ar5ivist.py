@@ -41,14 +41,16 @@ class LaTeXConversionError(Ar5ivistError):
 
 class Ar5ivistBackend(enum.Enum):
     DOCKER = "docker"
-    LOCAL = "local"
+    AR5IVIST = "ar5ivist"
+    LATEXMLC = "latexmlc"
+    LATEXML = "latexml"
     UNAVAILABLE = "unavailable"
 
 
 def detect_backend() -> Ar5ivistBackend:
     """Detect available ar5ivist backend. Results cached after first call.
 
-    Priority: Docker > local binary > unavailable.
+    Priority: Docker > ar5ivist > latexmlc > latexml+latexmlpost > unavailable.
     """
     global _backend_cache
     if _backend_cache is not None:
@@ -66,8 +68,16 @@ def detect_backend() -> Ar5ivistBackend:
         except (subprocess.CalledProcessError, FileNotFoundError, OSError):
             pass
 
-    if shutil.which("ar5ivist") or shutil.which("latexmlc"):
-        _backend_cache = Ar5ivistBackend.LOCAL
+    if shutil.which("ar5ivist"):
+        _backend_cache = Ar5ivistBackend.AR5IVIST
+        return _backend_cache
+
+    if shutil.which("latexmlc"):
+        _backend_cache = Ar5ivistBackend.LATEXMLC
+        return _backend_cache
+
+    if shutil.which("latexml") and shutil.which("latexmlpost"):
+        _backend_cache = Ar5ivistBackend.LATEXML
         return _backend_cache
 
     _backend_cache = Ar5ivistBackend.UNAVAILABLE
@@ -161,14 +171,27 @@ def run_ar5ivist(
     tex_abs = str(tex_path.resolve())
     html_filename = "index.html"
 
+    _backend_labels = {
+        Ar5ivistBackend.DOCKER: "ar5ivist (Docker)",
+        Ar5ivistBackend.AR5IVIST: "ar5ivist",
+        Ar5ivistBackend.LATEXMLC: "latexmlc",
+        Ar5ivistBackend.LATEXML: "latexml + latexmlpost",
+    }
     if progress_callback:
-        progress_callback("Converting LaTeX to HTML via ar5ivist...")
+        label = _backend_labels.get(backend, str(backend))
+        progress_callback(f"Converting LaTeX to HTML via {label}...")
 
     try:
         if backend == Ar5ivistBackend.DOCKER:
             return _run_docker(tex_abs, html_filename, progress_callback, timeout)
+        elif backend == Ar5ivistBackend.AR5IVIST:
+            return _run_ar5ivist_binary(tex_abs, output_dir, html_filename, progress_callback, timeout)
+        elif backend == Ar5ivistBackend.LATEXMLC:
+            return _run_latexmlc(tex_path, output_dir, html_filename, progress_callback, timeout)
+        elif backend == Ar5ivistBackend.LATEXML:
+            return _run_latexml_pipeline(tex_path, output_dir, html_filename, progress_callback, timeout)
         else:
-            return _run_local(tex_abs, output_dir, html_filename, progress_callback, timeout)
+            raise Ar5ivistNotFoundError(f"Unknown or unavailable backend: {backend}")
     except (subprocess.CalledProcessError, OSError) as e:
         raise LaTeXConversionError(f"ar5ivist conversion failed: {e}") from e
 
@@ -203,17 +226,17 @@ def _run_docker(
     return result
 
 
-def _run_local(
+def _run_ar5ivist_binary(
     tex_path: str,
     output_dir: str,
     html_filename: str,
     progress_callback: Callable[[str], None] | None,
     timeout: int,
 ) -> str:
-    """Invoke ar5ivist or latexmlc locally."""
-    binary = shutil.which("ar5ivist") or shutil.which("latexmlc")
+    """Invoke ar5ivist binary locally."""
+    binary = shutil.which("ar5ivist")
     if not binary:
-        raise Ar5ivistNotFoundError("No local ar5ivist or latexmlc binary found.")
+        raise Ar5ivistNotFoundError("No local ar5ivist binary found.")
 
     html_path = os.path.join(output_dir, html_filename)
 
@@ -232,10 +255,77 @@ def _run_local(
     return html_path
 
 
+def _run_latexmlc(
+    tex_path: Path,
+    output_dir: str,
+    html_filename: str,
+    progress_callback: Callable[[str], None] | None,
+    timeout: int,
+) -> str:
+    """One-step LaTeXML conversion: TeX → HTML via latexmlc."""
+    tex_dir = str(tex_path.parent)
+    tex_basename = tex_path.name
+    html_path = os.path.join(output_dir, html_filename)
+
+    cmd = ["latexmlc", "--dest", html_path, tex_basename]
+    _run_subprocess(cmd, progress_callback, timeout, cwd=tex_dir)
+
+    if not os.path.isfile(html_path):
+        raise LaTeXConversionError(
+            f"latexmlc did not produce expected output: {html_path}"
+        )
+    return html_path
+
+
+def _run_latexml_pipeline(
+    tex_path: Path,
+    output_dir: str,
+    html_filename: str,
+    progress_callback: Callable[[str], None] | None,
+    timeout: int,
+) -> str:
+    """Two-step LaTeXML conversion: TeX → XML → HTML via latexml + latexmlpost."""
+    tex_dir = str(tex_path.parent)
+    tex_basename = tex_path.name
+    xml_path = os.path.join(output_dir, "output.xml")
+    html_path = os.path.join(output_dir, html_filename)
+
+    if progress_callback:
+        progress_callback("Step 1/2: latexml (TeX → XML)...")
+    _run_subprocess(
+        ["latexml", "--dest", xml_path, tex_basename],
+        progress_callback,
+        timeout // 2,
+        cwd=tex_dir,
+    )
+
+    if not os.path.isfile(xml_path):
+        raise LaTeXConversionError(
+            f"latexml did not produce expected output: {xml_path}"
+        )
+
+    if progress_callback:
+        progress_callback("Step 2/2: latexmlpost (XML → HTML)...")
+    _run_subprocess(
+        ["latexmlpost", "--dest", html_path, xml_path],
+        progress_callback,
+        timeout // 2,
+        cwd=tex_dir,
+    )
+
+    if not os.path.isfile(html_path):
+        raise LaTeXConversionError(
+            f"latexmlpost did not produce expected output: {html_path}"
+        )
+    return html_path
+
+
 def _run_subprocess(
     cmd: list[str],
     progress_callback: Callable[[str], None] | None,
     timeout: int,
+    *,
+    cwd: str | None = None,
 ) -> None:
     """Run a subprocess with optional progress reporting and timeout."""
     if progress_callback:
@@ -247,6 +337,7 @@ def _run_subprocess(
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=cwd,
         )
         if result.returncode != 0:
             stderr_preview = result.stderr[:500] if result.stderr else "(no stderr)"
