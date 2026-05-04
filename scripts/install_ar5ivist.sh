@@ -70,6 +70,9 @@ Alternatively, install latexml locally:
   - Ubuntu/Debian: sudo apt install latexml
   - macOS: brew install latexml
   - Or: cpan install LaTeXML
+
+After all, you can refer to this page for more details:
+  https://math.nist.gov/~BMiller/LaTeXML/get.html
 EOF
 
 exit 1
