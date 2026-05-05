@@ -14,6 +14,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
+import warnings
 
 if TYPE_CHECKING:
     from arxiv_cli.client import ArxivClient
@@ -170,6 +171,7 @@ def run_ar5ivist(
     """
     tex_abs = str(tex_path.resolve())
     html_filename = "index.html"
+    warnings.warn("No native HTML available for this paper. Attempting conversion from LaTeX source via ar5ivist (this may take a while). Please wait.")
 
     try:
         if backend == Ar5ivistBackend.DOCKER:
